@@ -699,8 +699,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
 
         // Prive: one Settings menu for Telegram and Prive (Telegram setting cells, one Websites entry)
         items.add(UItem.asHeader("Prive"));
-        items.add(SettingCell.Factory.of(903, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_account, "Prive mode", "admin".equals(org.telegram.prive.PriveConfig.mode()) ? "Website administrator" : "Client"));
-        items.add(SettingCell.Factory.of(901, 0xFFE6CF9B, 0xFFA8894E, R.drawable.settings_language, "Websites", "admin".equals(org.telegram.prive.PriveConfig.mode()) ? "Your site, its chats and moderator tools" : "Website chats and your saved websites"));
+        items.add(SettingCell.Factory.of(901, 0xFFE6CF9B, 0xFFA8894E, R.drawable.settings_language, "Websites", "Website chats, updates and your websites"));
         items.add(SettingCell.Factory.of(905, IconBackgroundColors.RED.top, IconBackgroundColors.RED.bottom, R.drawable.settings_sounds, "Website Connect notifications", org.telegram.prive.PriveWcNotifier.channelEnabled(getParentActivity()) ? "On" : "Off"));
         items.add(SettingCell.Factory.of(906, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.settings_chat, "Appearance", "light".equals(org.telegram.prive.PriveConfig.theme()) ? "Light" : "Noir"));
         items.add(SettingCell.Factory.of(907, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_devices, "Link Prive Web", "Use Prive in a browser with a one-time code"));

@@ -22,27 +22,22 @@ import org.telegram.messenger.Utilities;
 public final class PriveFirstRun {
     private PriveFirstRun() {}
 
-    private static boolean checking, choosing;
+    private static boolean checking, choosing, loaded;
 
     public static void check(Activity a, Runnable onPrefsLoaded) {
         if (a == null || checking || PriveServer.currentTelegramUser() == null) return;
-        if (PriveConfig.mode() != null) { maybeBattery(a); return; }
+        if (loaded) { maybeBattery(a); return; }
         checking = true;
         Utilities.globalQueue.postRunnable(() -> {
             JSONObject r = PriveServer.api("GET", "/api/prefs", null);
             AndroidUtilities.runOnUIThread(() -> {
                 checking = false;
                 if (r == null || r.has("error")) return; // offline: try again next resume
-                String m = r.optString("mode", null);
+                // one Prive for everyone: no mode chooser; just pick up the saved websites
                 if (r.optJSONArray("userSites") != null) PriveConfig.setSites(r.optJSONArray("userSites").toString());
-                if (m != null && !"null".equals(m) && !m.isEmpty()) {
-                    PriveConfig.setMode(m);
-                    if (onPrefsLoaded != null) onPrefsLoaded.run();
-                    maybeBattery(a);
-                } else if (!choosing && !a.isFinishing()) {
-                    choosing = true;
-                    PriveWebsiteConnectActivity.open(a, "choose");
-                }
+                loaded = true;
+                if (onPrefsLoaded != null) onPrefsLoaded.run();
+                maybeBattery(a);
             });
         });
     }

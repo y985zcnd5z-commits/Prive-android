@@ -56,8 +56,6 @@ public class PriveSitesBar extends HorizontalScrollView {
         Utilities.globalQueue.postRunnable(() -> {
             JSONObject r = PriveServer.api("GET", "/api/prefs", null);
             if (r == null || r.has("error")) return;
-            String mode = r.optString("mode", null);
-            if (mode != null && !"null".equals(mode)) PriveConfig.setMode(mode);
             JSONArray s = r.optJSONArray("userSites");
             if (s != null) PriveConfig.setSites(s.toString());
             AndroidUtilities.runOnUIThread(this::render);
@@ -65,7 +63,7 @@ public class PriveSitesBar extends HorizontalScrollView {
     }
 
     public boolean wanted() {
-        return PriveConfig.MODE_CLIENT.equals(PriveConfig.mode()) && PriveConfig.sites().length() > 0;
+        return PriveConfig.sites().length() > 0;
     }
 
     private void render() {

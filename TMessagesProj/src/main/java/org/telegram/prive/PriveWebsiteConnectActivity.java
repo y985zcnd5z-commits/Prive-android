@@ -96,14 +96,23 @@ public class PriveWebsiteConnectActivity extends Activity {
             data = null;
             tab = "websites";
         }
+        String openFeed = null;
+        if (data != null && "prive".equals(data.getScheme()) && "updates".equals(data.getHost())) {
+            openFeed = data.getQueryParameter("feed"); // from a Website updates notification
+            if (openFeed != null) PriveUpdatesNotifier.clear(openFeed);
+            data = null;
+            tab = "websites";
+        }
         if (data != null) {
             // prive://connect?site=..&listing=..  or verified App Link https://priveconnect.com/app/?connect=..&listing=..
             String[] c = parseConnect(data);
-            if (c != null) { connectSite = c[0]; connectListing = c[1]; }
+            if (c != null) {
+                connectSite = c[0]; connectListing = c[1];
+            }
             tab = "websites";
         }
         if (tab == null) tab = "websites";
-        final String fTab = tab, fSite = connectSite, fListing = connectListing, fOpen = openConv;
+        final String fTab = tab, fSite = connectSite, fListing = connectListing, fOpen = openConv, fFeed = openFeed;
         currentTab = tab;
         final int BG = PriveConfig.bg(), FG = PriveConfig.fg(), GOLD = PriveConfig.gold();
 
@@ -189,6 +198,7 @@ public class PriveWebsiteConnectActivity extends Activity {
                 }
                 StringBuilder url = new StringBuilder(PriveServer.baseUrl()).append("/app/?embed=android&theme=").append(PriveConfig.theme()).append("&tab=").append(fTab);
                 if (!TextUtils.isEmpty(fOpen)) url.append("&open=").append(Uri.encode(fOpen));
+                if (!TextUtils.isEmpty(fFeed)) url.append("&updates=").append(Uri.encode(fFeed));
                 if (!TextUtils.isEmpty(fSite)) {
                     url.append("&connect=").append(Uri.encode(fSite));
                     if (!TextUtils.isEmpty(fListing)) url.append("&listing=").append(Uri.encode(fListing));

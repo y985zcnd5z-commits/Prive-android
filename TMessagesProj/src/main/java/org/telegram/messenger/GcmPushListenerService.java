@@ -27,6 +27,10 @@ public class GcmPushListenerService extends FirebaseMessagingService {
             FileLog.d("FCM received data: " + data + " from: " + from);
         }
 
+        if (data != null && data.containsKey("prive_update")) { // Prive server: a followed website posted an update
+            org.telegram.prive.PriveUpdatesNotifier.show(data.get("feed"), data.get("site"), data.get("title"), data.get("body"));
+            return;
+        }
         if (data != null && data.containsKey("prive_wc")) { // Prive server: Website Connect wake-up, not a Telegram push
             org.telegram.prive.PriveWcNotifier.onFcmWake();
             return;
