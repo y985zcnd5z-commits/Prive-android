@@ -1,0 +1,67 @@
+// Prive build-time configuration. NOTHING secret lives in git.
+// Resolution order for each value: environment variable -> prive.properties (gitignored) -> placeholder.
+//   TELEGRAM_API_CREDENTIALS : Telegram api_id (numeric). "api_id:api_hash" is also accepted.
+//   TELEGRAM_API_HASH        : Telegram api_hash (32 hex chars)
+//   PRIVE_SERVER_URL         : Prive Website Connect backend, e.g. https://prive.example.com
+//   PRIVE_APP_LINK_KEY       : optional, must match the server's APP_LINK_KEY
+//   PRIVE_ABIS               : optional comma list to speed up builds, e.g. "arm64-v8a"
+def priveProps = new Properties()
+def priveFile = rootProject.file('prive.properties')
+if (priveFile.exists()) priveFile.withInputStream { priveProps.load(it) }
+def priveVal = { String name, String dflt ->
+    def v = System.getenv(name)
+    if (v == null || v.trim().isEmpty()) v = priveProps.getProperty(name)
+    if (v == null || v.trim().isEmpty()) v = project.findProperty(name)
+    return (v == null || v.toString().trim().isEmpty()) ? dflt : v.toString().trim()
+}
+def creds = priveVal('TELEGRAM_API_CREDENTIALS', '')
+def apiId = creds, apiHash = priveVal('TELEGRAM_API_HASH', '')
+if (creds.contains(':')) { apiId = creds.split(':', 2)[0]; if (apiHash.isEmpty()) apiHash = creds.split(':', 2)[1] }
+if (!(apiId ==~ /\d+/) || apiHash.isEmpty()) {
+    logger.warn("PRIVE: Telegram API credentials not set -> building with PLACEHOLDER keys (login will not work). See README.md")
+    apiId = '0'; apiHash = 'PLACEHOLDER_SET_TELEGRAM_API_HASH'
+}
+ext.priveApiId = apiId
+ext.priveApiHash = apiHash
+ext.priveServerUrl = priveVal('PRIVE_SERVER_URL', 'http://10.0.2.2:8787')
+ext.priveLinkKey = priveVal('PRIVE_APP_LINK_KEY', '')
+ext.priveAbis = priveVal('PRIVE_ABIS', '')
+
+// ---- Firebase Cloud Messaging (optional) ----
+// Real pushes need Mark's own Firebase project. Provide its google-services.json via
+//   PRIVE_GOOGLE_SERVICES_JSON=/path/to/google-services.json   (env, prive.properties or -P)
+// or drop it at  <repo>/prive-google-services.json  (gitignored). It is copied over the placeholder in
+// TMessagesProj/ and TMessagesProj_App/ (both apply the google-services plugin). Without it the build uses the
+// placeholder project (number 000000000000), FCM stays off (hasServices() == false) and the foreground keep-alive
+// connection is the default notification path.
+def gsPath = priveVal('PRIVE_GOOGLE_SERVICES_JSON', '')
+def gsFile = gsPath.isEmpty() ? rootProject.file('prive-google-services.json') : new File(gsPath)
+def priveFcm = false
+if (gsFile.exists()) {
+    def txt = gsFile.getText('UTF-8')
+    if (!txt.contains('"project_number": "000000000000"') && !txt.contains('PLACEHOLDER')) {
+        // The library module (namespace org.telegram.messenger) and the .web flavor also run the google-services
+        // plugin, so give them a client entry cloned from the main app (the app module's values win at merge time).
+        def json = new groovy.json.JsonSlurper().parseText(txt)
+        def have = json.client.collect { it.client_info.android_client_info.package_name }
+        ['com.prive.messenger.web', 'org.telegram.messenger'].each { pkg ->
+            if (!have.contains(pkg) && !json.client.isEmpty()) {
+                def c = new groovy.json.JsonSlurper().parseText(groovy.json.JsonOutput.toJson(json.client[0]))
+                c.client_info.android_client_info.package_name = pkg
+                json.client << c
+            }
+        }
+        def out = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(json))
+        ['TMessagesProj', 'TMessagesProj_App'].each { m ->
+            def dst = rootProject.file("${m}/google-services.json")
+            if (!dst.exists() || dst.getText('UTF-8') != out) dst.write(out, 'UTF-8')
+        }
+        priveFcm = true
+        logger.lifecycle("PRIVE: FCM enabled with ${gsFile.name}")
+    }
+}
+if (!priveFcm) {
+    def cur = rootProject.file('TMessagesProj/google-services.json')
+    priveFcm = cur.exists() && !cur.getText('UTF-8').contains('000000000000')
+}
+ext.priveFcmConfigured = priveFcm
