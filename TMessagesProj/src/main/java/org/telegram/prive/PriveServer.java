@@ -12,6 +12,9 @@ import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BuildConfig;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.UserConfig;
+import org.telegram.messenger.MessagesController;
+import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
 import java.io.ByteArrayOutputStream;
@@ -22,10 +25,12 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Links the logged-in Telegram account to a Prive server account.
- * POST {PRIVE_SERVER_URL}/api/telegram/link  ->  { token, linkSecret, user }
- * The linkSecret is stored per Telegram user id (trust-on-first-use, see server README) and must be
- * presented on every later link. Blocking call: run it off the UI thread.
+ * Links the logged-in Telegram account to a Prive server account, VERIFIED by Telegram:
+ * POST /api/tg/begin -> {nonce, secret, bot}; this app silently sends /start <nonce> to the Prive bot with the
+ * user's own MTProto session (messages.startBot); the server's bot sees the Telegram-verified sender id;
+ * POST /api/tg/finish {nonce, secret, telegramUserId} -> {token}. The bot chat is removed afterwards.
+ * Legacy unverified /api/telegram/link is only used if the server has no bot configured.
+ * Blocking call: run it off the UI thread.
  */
 public final class PriveServer {
 
@@ -110,7 +115,118 @@ public final class PriveServer {
         return null;
     }
 
+    private static JSONObject postJson(String path, JSONObject body, int[] status) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(baseUrl() + path).openConnection();
+        try {
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(15000);
+            c.setRequestMethod(body == null ? "GET" : "POST");
+            String t = token();
+            if (t != null) c.setRequestProperty("Authorization", "Bearer " + t);
+            if (body != null) {
+                c.setDoOutput(true);
+                c.setRequestProperty("Content-Type", "application/json");
+                try (OutputStream os = c.getOutputStream()) { os.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
+            }
+            int code = c.getResponseCode();
+            if (status != null) status[0] = code;
+            InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while (is != null && (n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            return new JSONObject(bos.size() > 0 ? bos.toString("UTF-8") : "{}");
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    /** Blocking MTProto call on the current account. */
+    private static TLObject invoke(TLObject req) throws Exception {
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final TLObject[] out = new TLObject[1];
+        final TLRPC.TL_error[] err = new TLRPC.TL_error[1];
+        ConnectionsManager.getInstance(UserConfig.selectedAccount).sendRequest(req, (res, e) -> { out[0] = res; err[0] = e; latch.countDown(); });
+        if (!latch.await(20, java.util.concurrent.TimeUnit.SECONDS)) throw new Exception("timeout");
+        if (err[0] != null) throw new Exception(err[0].text);
+        return out[0];
+    }
+
+    private static volatile long lastVerifiedAttempt;
+
+    /** Verified link through the Prive bot. Returns null result (not error) when the server has no bot. */
+    private static LinkResult verifiedLink(TLRPC.User user) throws Exception {
+        JSONObject cfg = postJson("/api/tg/config", null, null);
+        if (!cfg.optBoolean("enabled")) return null;
+        LinkResult r = new LinkResult();
+        if (System.currentTimeMillis() - lastVerifiedAttempt < 20000) { r.error = "busy"; return r; }
+        lastVerifiedAttempt = System.currentTimeMillis();
+        int[] st = new int[1];
+        JSONObject b = postJson("/api/tg/begin", new JSONObject(), st);
+        if (st[0] >= 400) { r.error = b.optString("error", "HTTP " + st[0]); return r; }
+        String nonce = b.getString("nonce"), secret = b.getString("secret"), bot = b.getString("bot");
+
+        TLRPC.TL_contacts_resolveUsername rq = new TLRPC.TL_contacts_resolveUsername();
+        rq.username = bot;
+        TLRPC.TL_contacts_resolvedPeer rp = (TLRPC.TL_contacts_resolvedPeer) invoke(rq);
+        TLRPC.User botUser = null;
+        for (TLRPC.User u : rp.users) if (u.bot && bot.equalsIgnoreCase(org.telegram.messenger.UserObject.getPublicUsername(u))) botUser = u;
+        if (botUser == null) { r.error = "bot not found"; return r; }
+        final TLRPC.User fBot = botUser;
+        final int account = UserConfig.selectedAccount;
+        org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> MessagesController.getInstance(account).putUser(fBot, false));
+
+        TLRPC.TL_messages_startBot sb = new TLRPC.TL_messages_startBot();
+        TLRPC.TL_inputUser iu = new TLRPC.TL_inputUser();
+        iu.user_id = botUser.id; iu.access_hash = botUser.access_hash;
+        TLRPC.TL_inputPeerUser ip = new TLRPC.TL_inputPeerUser();
+        ip.user_id = botUser.id; ip.access_hash = botUser.access_hash;
+        sb.bot = iu; sb.peer = ip; sb.random_id = org.telegram.messenger.Utilities.random.nextLong(); sb.start_param = nonce;
+        TLObject upd = invoke(sb);
+        if (upd instanceof TLRPC.Updates) MessagesController.getInstance(account).processUpdates((TLRPC.Updates) upd, false);
+
+        JSONObject fin = new JSONObject();
+        fin.put("nonce", nonce); fin.put("secret", secret); fin.put("telegramUserId", String.valueOf(user.id));
+        try {
+            for (int i = 0; i < 25; i++) {
+                Thread.sleep(i == 0 ? 800 : 1200);
+                JSONObject f = postJson("/api/tg/finish", fin, st);
+                if (st[0] == 202) continue;
+                if (st[0] >= 400) { r.error = f.optString("error", "HTTP " + st[0]); return r; }
+                r.token = f.getString("token");
+                r.isNew = f.optBoolean("isNew");
+                prefs().edit().putString("token_" + user.id, r.token).remove("linkSecret_" + user.id).apply();
+                return r;
+            }
+            r.error = "timeout";
+            return r;
+        } finally {
+            // remove the (now empty) Prive bot chat so it never shows in the chat list
+            org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> MessagesController.getInstance(account).deleteDialog(fBot.id, 0), 1500);
+        }
+    }
+
+    /** Uses the stored (verified) token if there is one; links only when needed. */
+    public static LinkResult linkIfNeeded(TLRPC.User user) {
+        String t = prefs().getString("token_" + user.id, null);
+        if (t != null) { LinkResult r = new LinkResult(); r.token = t; return r; }
+        return link(user);
+    }
+
     public static LinkResult link(TLRPC.User user) {
+        try {
+            LinkResult v = verifiedLink(user);
+            if (v != null) return v;
+        } catch (Exception e) {
+            LinkResult r = new LinkResult();
+            r.error = e.getClass().getSimpleName() + ": " + e.getMessage();
+            return r;
+        }
+        return legacyLink(user);
+    }
+
+    /** Old trust-on-first-use link; the server refuses it once the Prive bot is configured. */
+    private static LinkResult legacyLink(TLRPC.User user) {
         LinkResult r = new LinkResult();
         HttpURLConnection c = null;
         try {

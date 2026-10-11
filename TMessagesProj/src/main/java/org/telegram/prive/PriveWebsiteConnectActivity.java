@@ -180,7 +180,7 @@ public class PriveWebsiteConnectActivity extends Activity {
             return;
         }
         Utilities.globalQueue.postRunnable(() -> {
-            PriveServer.LinkResult r = PriveServer.link(user);
+            PriveServer.LinkResult r = PriveServer.linkIfNeeded(user);
             AndroidUtilities.runOnUIThread(() -> {
                 if (isFinishing()) return;
                 if (r.token == null) {
